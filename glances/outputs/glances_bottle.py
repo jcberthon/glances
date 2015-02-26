@@ -2,7 +2,7 @@
 #
 # This file is part of Glances.
 #
-# Copyright (C) 2014 Nicolargo <nicolas@nicolargo.com>
+# Copyright (C) 2015 Nicolargo <nicolas@nicolargo.com>
 #
 # Glances is free software; you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -28,7 +28,7 @@ from glances.core.glances_logging import logger
 
 # Import mandatory Bottle lib
 try:
-    from bottle import Bottle, template, static_file, TEMPLATE_PATH, abort, response
+    from bottle import Bottle, template, static_file, TEMPLATE_PATH, abort, response, request
 except ImportError:
     logger.critical('Bottle module not found. Glances cannot start in web server mode.')
     sys.exit(2)
@@ -48,6 +48,9 @@ class GlancesBottle(object):
 
         # Init Bottle
         self._app = Bottle()
+        # Enable CORS (issue #479)
+        self._app.install(EnableCors())
+        # Define routes
         self._route()
 
         # Update the template path (glances/outputs/bottle)
@@ -56,38 +59,21 @@ class GlancesBottle(object):
         # Path where the statics files are stored
         self.STATIC_PATH = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'static')
 
-        # Define the style (CSS) list (hash table) for stats
-        self.__style_list = {
-            'DEFAULT': '',
-            'UNDERLINE': 'underline',
-            'BOLD': 'bold',
-            'SORT': 'sort',
-            'OK': 'ok',
-            'FILTER': 'filter',
-            'TITLE': 'title',
-            'CAREFUL': 'careful',
-            'WARNING': 'warning',
-            'CRITICAL': 'critical',
-            'OK_LOG': 'ok_log',
-            'CAREFUL_LOG': 'careful_log',
-            'WARNING_LOG': 'warning_log',
-            'CRITICAL_LOG': 'critical_log',
-            'NICE': 'nice',
-            'STATUS': 'status',
-            'PROCESS': ''
-        }
-
     def _route(self):
         """Define route."""
         self._app.route('/', method="GET", callback=self._index)
         self._app.route('/<refresh_time:int>', method=["GET", "POST"], callback=self._index)
         self._app.route('/<filename:re:.*\.css>', method="GET", callback=self._css)
         self._app.route('/<filename:re:.*\.js>', method="GET", callback=self._js)
+        self._app.route('/favicon.ico', method="GET", callback=self._favicon)
         # REST API
         self._app.route('/api/2/pluginslist', method="GET", callback=self._api_plugins)
         self._app.route('/api/2/all', method="GET", callback=self._api_all)
+        self._app.route('/api/2/all/limits', method="GET", callback=self._api_all_limits)
+        self._app.route('/api/2/all/views', method="GET", callback=self._api_all_views)
         self._app.route('/api/2/:plugin', method="GET", callback=self._api)
         self._app.route('/api/2/:plugin/limits', method="GET", callback=self._api_limits)
+        self._app.route('/api/2/:plugin/views', method="GET", callback=self._api_views)
         self._app.route('/api/2/:plugin/:item', method="GET", callback=self._api_item)
         self._app.route('/api/2/:plugin/:item/:value', method="GET", callback=self._api_value)
 
@@ -111,7 +97,6 @@ class GlancesBottle(object):
 
     def _index(self, refresh_time=None):
         """Bottle callback for index.html (/) file."""
-        response.content_type = 'text/html'
         # Manage parameter
         if refresh_time is None:
             refresh_time = self.args.time
@@ -124,15 +109,18 @@ class GlancesBottle(object):
 
     def _css(self, filename):
         """Bottle callback for *.css files."""
-        response.content_type = 'text/html'
         # Return the static file
         return static_file(filename, root=os.path.join(self.STATIC_PATH, 'css'))
 
     def _js(self, filename):
         """Bottle callback for *.js files."""
-        response.content_type = 'text/html'
         # Return the static file
         return static_file(filename, root=os.path.join(self.STATIC_PATH, 'js'))
+
+    def _favicon(self):
+        """Bottle callback for favicon."""
+        # Return the static file
+        return static_file('favicon.ico', root=self.STATIC_PATH)
 
     def _api_plugins(self):
         """
@@ -165,11 +153,45 @@ class GlancesBottle(object):
         self.stats.update()
 
         try:
-            # Get the JSON value of the stat ID
+            # Get the JSON value of the stat value
             statval = json.dumps(self.stats.getAllAsDict())
         except Exception as e:
             abort(404, "Cannot get stats (%s)" % str(e))
         return statval
+
+    def _api_all_limits(self):
+        """
+        Glances API RESTFul implementation
+        Return the JSON representation of all the plugins limits
+        HTTP/200 if OK
+        HTTP/400 if plugin is not found
+        HTTP/404 if others error
+        """
+        response.content_type = 'application/json'
+
+        try:
+            # Get the JSON value of the stat limits
+            limits = json.dumps(self.stats.getAllLimitsAsDict())
+        except Exception as e:
+            abort(404, "Cannot get limits (%s)" % (str(e)))
+        return limits
+
+    def _api_all_views(self):
+        """
+        Glances API RESTFul implementation
+        Return the JSON representation of all the plugins views
+        HTTP/200 if OK
+        HTTP/400 if plugin is not found
+        HTTP/404 if others error
+        """
+        response.content_type = 'application/json'
+
+        try:
+            # Get the JSON value of the stat view
+            limits = json.dumps(self.stats.getAllViewsAsDict())
+        except Exception as e:
+            abort(404, "Cannot get views (%s)" % (str(e)))
+        return limits
 
     def _api(self, plugin):
         """
@@ -211,11 +233,34 @@ class GlancesBottle(object):
         # self.stats.update()
 
         try:
-            # Get the JSON value of the stat ID
-            limits = self.stats.get_plugin(plugin).get_limits()
+            # Get the JSON value of the stat limits
+            ret = self.stats.get_plugin(plugin).get_limits()
         except Exception as e:
             abort(404, "Cannot get limits for plugin %s (%s)" % (plugin, str(e)))
-        return limits
+        return ret
+
+    def _api_views(self, plugin):
+        """
+        Glances API RESTFul implementation
+        Return the JSON views of a given plugin
+        HTTP/200 if OK
+        HTTP/400 if plugin is not found
+        HTTP/404 if others error
+        """
+        response.content_type = 'application/json'
+
+        if plugin not in self.plugins_list:
+            abort(400, "Unknown plugin %s (available plugins: %s)" % (plugin, self.plugins_list))
+
+        # Update the stat
+        # self.stats.update()
+
+        try:
+            # Get the JSON value of the stat views
+            ret = self.stats.get_plugin(plugin).get_views()
+        except Exception as e:
+            abort(404, "Cannot get views for plugin %s (%s)" % (plugin, str(e)))
+        return ret
 
     def _api_item(self, plugin, item):
         """
@@ -269,77 +314,42 @@ class GlancesBottle(object):
 
         stats: Stats database to display
         """
-        html = template('header', refresh_time=refresh_time)
-        html += '<header>'
-        html += self.display_plugin('system', self.stats.get_plugin('system').get_stats_display(args=self.args))
-        html += self.display_plugin('uptime', self.stats.get_plugin('uptime').get_stats_display(args=self.args))
-        html += '</header>'
-        html += template('newline')
-        html += '<section>'
-        html += self.display_plugin('cpu', self.stats.get_plugin('cpu').get_stats_display(args=self.args))
-        load_msg = self.stats.get_plugin('load').get_stats_display(args=self.args)
-        if load_msg['msgdict'] != []:
-            # Load is not available on all OS
-            # Only display if stat is available
-            html += self.display_plugin('load', load_msg)
-        html += self.display_plugin('mem', self.stats.get_plugin('mem').get_stats_display(args=self.args))
-        html += self.display_plugin('memswap', self.stats.get_plugin('memswap').get_stats_display(args=self.args))
-        html += '</section>'
-        html += template('newline')
-        html += '<div>'
-        html += '<aside id="lefttstats">'
-        html += self.display_plugin('network', self.stats.get_plugin('network').get_stats_display(args=self.args))
-        html += self.display_plugin('diskio', self.stats.get_plugin('diskio').get_stats_display(args=self.args))
-        html += self.display_plugin('fs', self.stats.get_plugin('fs').get_stats_display(args=self.args))
-        html += self.display_plugin('sensors', self.stats.get_plugin('sensors').get_stats_display(args=self.args))
-        html += '</aside>'
-        html += '<section id="rightstats">'
-        html += self.display_plugin('alert', self.stats.get_plugin('alert').get_stats_display(args=self.args))
-        html += self.display_plugin('processcount', self.stats.get_plugin('processcount').get_stats_display(args=self.args))
-        html += self.display_plugin('monitor', self.stats.get_plugin('monitor').get_stats_display(args=self.args))
-        html += self.display_plugin('processlist', self.stats.get_plugin('processlist').get_stats_display(args=self.args))
-        html += '</section>'
-        html += '</div>'
-        html += template('newline')
-        html += template('footer')
 
-        return html
+        stats = {
+            'system': self.stats.get_plugin('system').get_stats_display(args=self.args),
+            'uptime': self.stats.get_plugin('uptime').get_stats_display(args=self.args),
+            'cpu': self.stats.get_plugin('cpu').get_stats_display(args=self.args),
+            'load': self.stats.get_plugin('load').get_stats_display(args=self.args),
+            'mem': self.stats.get_plugin('mem').get_stats_display(args=self.args),
+            'memswap': self.stats.get_plugin('memswap').get_stats_display(args=self.args),
+            'network': self.stats.get_plugin('network').get_stats_display(args=self.args),
+            'diskio': self.stats.get_plugin('diskio').get_stats_display(args=self.args),
+            'fs': self.stats.get_plugin('fs').get_stats_display(args=self.args),
+            'raid': self.stats.get_plugin('raid').get_stats_display(args=self.args),
+            'sensors': self.stats.get_plugin('sensors').get_stats_display(args=self.args),
+            'alert': self.stats.get_plugin('alert').get_stats_display(args=self.args),
+            'processcount': self.stats.get_plugin('processcount').get_stats_display(args=self.args),
+            'monitor': self.stats.get_plugin('monitor').get_stats_display(args=self.args),
+            'processlist': self.stats.get_plugin('processlist').get_stats_display(args=self.args),
+            'docker': self.stats.get_plugin('docker').get_stats_display(args=self.args)
+        }
 
-    def display_plugin(self, plugin_name, plugin_stats):
-        """Generate the Bottle template for the plugin_stats."""
-        # Template header
-        tpl = """ \
-                %#Template for Bottle
-              """
-        tpl += '<article class="plugin" id="%s">' % plugin_name
+        return template('base', refresh_time=refresh_time, stats=stats)
 
-        tpl += '<div id="table">'
-        tpl += '<div class="row">'
-        for m in plugin_stats['msgdict']:
-            # New line
-            if m['msg'].startswith('\n'):
-                tpl += '</div>'
-                tpl += '<div class="row">'
-                continue
-            if plugin_name == 'processlist' and m['splittable']:
-                # Processlist: Display first 20 chars of the process name
-                if m['msg'].split(' ', 1)[0] != '':
-                    tpl += '<span class="cell" id="%s">&nbsp;%s</span>' % \
-                        (self.__style_list[m['decoration']],
-                         m['msg'].split(' ', 1)[0].replace(' ', '&nbsp;')[:20])
-            elif m['optional']:
-                # Manage optional stats (responsive design)
-                tpl += '<span class="cell hide" id="%s">%s</span>' % \
-                    (self.__style_list[m['decoration']], m['msg'].replace(' ', '&nbsp;'))
-            else:
-                # Display stat
-                tpl += '<span class="cell" id="%s">%s</span>' % \
-                    (self.__style_list[m['decoration']], m['msg'].replace(' ', '&nbsp;'))
-        tpl += '</div>'
-        tpl += '</div>'
 
-        tpl += """ \
-                </article>
-                %#End Template for Bottle
-               """
-        return template(tpl)
+class EnableCors(object):
+    name = 'enable_cors'
+    api = 2
+
+    def apply(self, fn, context):
+        def _enable_cors(*args, **kwargs):
+            # set CORS headers
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Origin, Accept, Content-Type, X-Requested-With, X-CSRF-Token'
+
+            if request.method != 'OPTIONS':
+                # actual request; reply with the actual response
+                return fn(*args, **kwargs)
+
+        return _enable_cors

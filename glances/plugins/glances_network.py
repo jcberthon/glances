@@ -2,7 +2,7 @@
 #
 # This file is part of Glances.
 #
-# Copyright (C) 2014 Nicolargo <nicolas@nicolargo.com>
+# Copyright (C) 2015 Nicolargo <nicolas@nicolargo.com>
 #
 # Glances is free software; you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -57,6 +57,10 @@ class Plugin(GlancesPlugin):
 
         # Init the stats
         self.reset()
+
+    def get_key(self):
+        """Return the key of the list"""
+        return 'interface_name'
 
     def reset(self):
         """Reset/init the stats."""
@@ -113,6 +117,7 @@ class Plugin(GlancesPlugin):
                     except KeyError:
                         continue
                     else:
+                        netstat['key'] = self.get_key()
                         self.stats.append(netstat)
 
                 # Save stats to compute next bitrate
@@ -169,15 +174,33 @@ class Plugin(GlancesPlugin):
                     except KeyError:
                         continue
                     else:
+                        netstat['key'] = self.get_key()
                         self.stats.append(netstat)
 
                 # Save stats to compute next bitrate
                 self.network_old = network_new
 
         # Update the history list
-        self.update_stats_history('interface_name')
+        self.update_stats_history(self.get_key())
+
+        # Update the view
+        self.update_views()
 
         return self.stats
+
+    def update_views(self):
+        """Update stats views"""
+        # Call the father's method
+        GlancesPlugin.update_views(self)
+
+        # Add specifics informations
+        # Alert
+        for i in self.stats:
+            ifrealname = i['interface_name'].split(':')[0]
+            self.views[i[self.get_key()]]['rx']['decoration'] = self.get_alert(int(i['rx'] // i['time_since_update'] * 8),
+                                                                               header=ifrealname + '_rx')
+            self.views[i[self.get_key()]]['tx']['decoration'] = self.get_alert(int(i['tx'] // i['time_since_update'] * 8),
+                                                                               header=ifrealname + '_tx')
 
     def msg_curse(self, args=None, max_width=None):
         """Return the dict to display in the curse interface."""
@@ -224,15 +247,16 @@ class Plugin(GlancesPlugin):
                 msg = '{0:>7}'.format(_("Tx/s"))
                 ret.append(self.curse_add_line(msg))
         # Interface list (sorted by name)
-        for i in sorted(self.stats, key=operator.itemgetter('interface_name')):
+        for i in sorted(self.stats, key=operator.itemgetter(self.get_key())):
             # Do not display hidden interfaces
             if self.is_hide(i['interface_name']):
                 continue
             # Format stats
             # Is there an alias for the interface name ?
+            ifrealname = i['interface_name'].split(':')[0]
             ifname = self.has_alias(i['interface_name'])
             if ifname is None:
-                ifname = i['interface_name'].split(':')[0]
+                ifname = ifrealname
             if len(ifname) > ifname_max_width:
                 # Cut interface name if it is too long
                 ifname = '_' + ifname[-ifname_max_width + 1:]
@@ -270,11 +294,9 @@ class Plugin(GlancesPlugin):
             else:
                 msg = '{0:>7}'.format(rx)
                 ret.append(self.curse_add_line(
-                    msg, self.get_alert(int(i['rx'] // i['time_since_update'] * 8),
-                                        header=ifname + '_rx')))
+                    msg, self.get_views(item=i[self.get_key()], key='rx', option='decoration')))
                 msg = '{0:>7}'.format(tx)
                 ret.append(self.curse_add_line(
-                    msg, self.get_alert(int(i['tx'] // i['time_since_update'] * 8),
-                                        header=ifname + '_tx')))
+                    msg, self.get_views(item=i[self.get_key()], key='tx', option='decoration')))
 
         return ret

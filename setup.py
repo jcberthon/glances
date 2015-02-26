@@ -6,6 +6,8 @@ import sys
 
 from setuptools import setup
 
+is_chroot = os.stat('/').st_ino != 2
+
 
 def get_data_files():
     data_files = [
@@ -15,15 +17,16 @@ def get_data_files():
         ('share/man/man1', ['man/glances.1'])
     ]
 
-    if os.name == 'posix' and os.getuid() == 0:  # Unix-like + root privileges
+    if hasattr(sys, 'real_prefix'):  # virtualenv
+        conf_path = os.path.join(sys.prefix, 'etc', 'glances')
+    elif os.name == 'posix' and (os.getuid() == 0 or is_chroot):
+        # Unix-like + root privileges/chroot environment
         if 'bsd' in sys.platform:
             conf_path = os.path.join(sys.prefix, 'etc', 'glances')
         elif 'linux' in sys.platform:
             conf_path = os.path.join('/etc', 'glances')
         elif 'darwin' in sys.platform:
             conf_path = os.path.join('/usr/local', 'etc', 'glances')
-    elif hasattr(sys, 'real_prefix'):  # virtualenv
-        conf_path = os.path.join(sys.prefix, 'etc', 'glances')
     elif 'win32' in sys.platform:  # windows
         conf_path = os.path.join(os.environ.get('APPDATA'), 'glances')
     else:  # Unix-like + per-user install
@@ -49,13 +52,13 @@ def get_requires():
 
 setup(
     name='Glances',
-    version='2.2.1',
+    version='2.3',
     description="A cross-platform curses-based monitoring tool",
     long_description=open('README.rst').read(),
     author='Nicolas Hennion',
     author_email='nicolas@nicolargo.com',
     url='https://github.com/nicolargo/glances',
-    # download_url='https://s3.amazonaws.com/glances/glances-2.2.1.tar.gz',
+    # download_url='https://s3.amazonaws.com/glances/glances-2.3.tar.gz',
     license="LGPL",
     keywords="cli curses monitoring system",
     install_requires=get_requires(),
@@ -65,7 +68,11 @@ setup(
         'BATINFO': ['batinfo'],
         'SNMP': ['pysnmp'],
         'CHART': ['matplotlib'],
-        'BROWSER': ['zeroconf>=0.16', 'netifaces']
+        'BROWSER': ['zeroconf>=0.16', 'netifaces'],
+        'RAID': ['pymdstat'],
+        'DOCKER': ['docker-py'],
+        'EXPORT': ['influxdb', 'statsd'],
+        'ACTION': ['pystache']
     },
     packages=['glances'],
     include_package_data=True,

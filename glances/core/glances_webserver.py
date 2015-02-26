@@ -2,7 +2,7 @@
 #
 # This file is part of Glances.
 #
-# Copyright (C) 2014 Nicolargo <nicolas@nicolargo.com>
+# Copyright (C) 2015 Nicolargo <nicolas@nicolargo.com>
 #
 # Glances is free software; you can redistribute it and/or modify
 # it under the terms of the GNU Lesser General Public License as published by
@@ -20,6 +20,8 @@
 """Glances Web Interface (Bottle based)."""
 
 # Import Glances libs
+from glances.core.glances_globals import is_windows
+from glances.core.glances_processes import glances_processes
 from glances.core.glances_stats import GlancesStats
 from glances.outputs.glances_bottle import GlancesBottle
 
@@ -31,6 +33,10 @@ class GlancesWebServer(object):
     def __init__(self, config=None, args=None):
         # Init stats
         self.stats = GlancesStats(config)
+
+        if (not is_windows) and args.no_kernel_threads:
+            # Ignore kernel threads in process list
+            glances_processes.disable_kernel_threads()
 
         # Initial system informations update
         self.stats.update()
